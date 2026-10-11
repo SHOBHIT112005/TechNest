@@ -115,7 +115,7 @@ export default function Home({ products }: HomeProps) {
                   <div>
                     <h2 className="text-2xl py-5 font-medium">{categoryName}</h2>
                     <div className="flex -mx-5 overflow-x-scroll snap-x scrollbar-hide">
-                      {products.filter(p => p.categories.includes(categoryName))
+                      {products.filter(p => p.categories.includes(categoryName)).slice(0, 12)
                         .map(productInfo => (
                           <div key={productInfo.id} className="px-5 shrink-0 snap-start">
                             <Product {...productInfo} />

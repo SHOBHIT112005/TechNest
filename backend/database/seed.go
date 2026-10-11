@@ -6,8 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// seedProducts contains the 25 products matching the original MongoDB seed data.
-// Each entry maps to frontend/lib/seed.js.
+// seedData contains the original 25 products (frontend/lib/seed.js);
+// generatedProducts() in seed_catalog.go adds the expanded catalog.
 type seedProduct struct {
 	Name        string
 	Description string
@@ -44,57 +44,60 @@ var seedData = []seedProduct{
 	{Name: "Samsung Odyssey G7", Description: "32-inch 4K 144Hz curved gaming monitor with 1ms response time.", Price: 799, Picture: "/products/g7.png", Categories: []string{"Gaming"}},
 }
 
-// Seed populates the database with initial product and category data.
-// It only runs if the products table is empty (idempotent).
+// Seed inserts any seed products (original 25 + generated catalog) missing by name.
+// Skips entirely once the products table already holds at least that many rows.
 func Seed() {
+	all := append(append([]seedProduct{}, seedData...), generatedProducts()...)
+
 	var count int64
 	DB.Model(&Product{}).Count(&count)
-	if count > 0 {
+	if count >= int64(len(all)) {
 		log.Printf("Database already seeded (%d products found). Skipping.", count)
 		return
 	}
 
-	log.Println("Seeding database with initial data...")
+	log.Printf("Seeding database (%d products present, %d in catalog)...", count, len(all))
 
+	added := 0
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		// 1. Create categories (find or create to be safe)
-		categoryMap := make(map[string]*Category)
-		categoryNames := []string{"Laptops", "Phones", "Accessories", "Gaming"}
-
-		for _, name := range categoryNames {
-			cat := &Category{Name: name}
-			result := tx.Where("name = ?", name).FirstOrCreate(cat)
-			if result.Error != nil {
-				return result.Error
-			}
-			categoryMap[name] = cat
+		var names []string
+		if err := tx.Model(&Product{}).Pluck("name", &names).Error; err != nil {
+			return err
+		}
+		existing := make(map[string]bool, len(names))
+		for _, n := range names {
+			existing[n] = true
 		}
 
-		// 2. Create products with category associations
-		for _, sp := range seedData {
+		categoryMap := make(map[string]Category)
+		for _, sp := range all {
+			if existing[sp.Name] {
+				continue
+			}
+			var cats []Category
+			for _, name := range sp.Categories {
+				cat, ok := categoryMap[name]
+				if !ok {
+					cat = Category{Name: name}
+					if err := tx.Where("name = ?", name).FirstOrCreate(&cat).Error; err != nil {
+						return err
+					}
+					categoryMap[name] = cat
+				}
+				cats = append(cats, cat)
+			}
 			product := Product{
 				Name:        sp.Name,
 				Description: sp.Description,
 				Price:       sp.Price,
 				Picture:     sp.Picture,
+				Categories:  cats,
 			}
-
 			if err := tx.Create(&product).Error; err != nil {
 				return err
 			}
-
-			// Associate categories
-			var cats []Category
-			for _, catName := range sp.Categories {
-				if cat, ok := categoryMap[catName]; ok {
-					cats = append(cats, *cat)
-				}
-			}
-			if err := tx.Model(&product).Association("Categories").Replace(cats); err != nil {
-				return err
-			}
+			added++
 		}
-
 		return nil
 	})
 
@@ -102,5 +105,5 @@ func Seed() {
 		log.Fatalf("Seed failed: %v", err)
 	}
 
-	log.Printf("Seeded %d products and %d categories successfully", len(seedData), 4)
+	log.Printf("Seeded %d new products successfully", added)
 }
