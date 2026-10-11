@@ -2,6 +2,7 @@ package database
 
 import (
 	"log"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -48,6 +49,7 @@ var seedData = []seedProduct{
 // Skips entirely once the products table already holds at least that many rows.
 func Seed() {
 	all := append(append([]seedProduct{}, seedData...), generatedProducts()...)
+	syncPictures(all)
 
 	var count int64
 	DB.Model(&Product{}).Count(&count)
@@ -106,4 +108,26 @@ func Seed() {
 	}
 
 	log.Printf("Seeded %d new products successfully", added)
+}
+
+// syncPictures points already-seeded products at the catalog's current image
+// in one statement, so image changes reach existing databases.
+// ponytail: overwrites admin-edited pictures on seed products; key on a seed flag if that matters.
+func syncPictures(all []seedProduct) {
+	values := make([]string, len(all))
+	args := make([]interface{}, 0, len(all)*2)
+	for i, sp := range all {
+		values[i] = "(?, ?)"
+		args = append(args, sp.Name, sp.Picture)
+	}
+	res := DB.Exec(`UPDATE products AS p SET picture = v.pic
+		FROM (VALUES `+strings.Join(values, ",")+`) AS v(name, pic)
+		WHERE p.name = v.name AND p.picture IS DISTINCT FROM v.pic`, args...)
+	if res.Error != nil {
+		log.Printf("Picture sync failed: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("Updated pictures on %d products", res.RowsAffected)
+	}
 }
